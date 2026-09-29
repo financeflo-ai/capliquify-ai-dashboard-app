@@ -55,9 +55,8 @@ vi.mock('../../../server/services/sse/index.cjs', () => ({
   emitUnleashedSyncStarted: vi.fn(),
   emitUnleashedSyncCompleted: vi.fn(),
   emitUnleashedSyncError: vi.fn(),
-  default: {
-    broadcast: vi.fn()
-  }
+  emitUnleashedQualityAlert: vi.fn(),
+  emitUnleashedLowStockAlert: vi.fn()
 }))
 
 // Import service AFTER all mocks are set up
@@ -67,7 +66,9 @@ import { logWarn, logError } from '../../../src/utils/logger'
 import {
   emitUnleashedSyncStarted,
   emitUnleashedSyncCompleted,
-  emitUnleashedSyncError
+  emitUnleashedSyncError,
+  emitUnleashedQualityAlert,
+  emitUnleashedLowStockAlert
 } from '../../../server/services/sse/index.cjs'
 
 describe('UnleashedERPService', () => {
@@ -268,6 +269,66 @@ describe('UnleashedERPService', () => {
       expect(result.alerts.length).toBeGreaterThan(0)
       expect(result.alerts[0].batchId).toBe('AJ001')
       expect(result.alerts[0].issue).toContain('Yield shortfall')
+      expect(result.metrics.totalJobs).toBe(1)
+      expect(redisCacheService.set).toHaveBeenCalledWith(
+        'unleashed:production',
+        expect.objectContaining({ alerts: result.alerts }),
+        900
+      )
+      expect(emitUnleashedQualityAlert).toHaveBeenCalledTimes(1)
+      expect(emitUnleashedQualityAlert).toHaveBeenCalledWith({
+        count: 1,
+        criticalIssues: 0,
+        alerts: [expect.objectContaining({ batchId: 'AJ001' })],
+        timestamp: expect.any(String)
+      })
+    })
+
+    it('should not emit a quality alert when all jobs meet yield', async () => {
+      mockAxiosInstance.get.mockResolvedValue({
+        data: {
+          Items: [
+            {
+              AssemblyJobNumber: 'AJ002',
+              JobStatus: 'Completed',
+              PlannedQuantity: 100,
+              ActualQuantity: 100
+            }
+          ]
+        }
+      })
+      redisCacheService.set.mockResolvedValue()
+
+      const result = await unleashedERPService.syncProductionData()
+
+      expect(result.metrics.totalJobs).toBe(1)
+      expect(result.alerts).toEqual([])
+      expect(emitUnleashedQualityAlert).not.toHaveBeenCalled()
+    })
+
+    it('should still return production data if the alert emit fails', async () => {
+      mockAxiosInstance.get.mockResolvedValue({
+        data: {
+          Items: [
+            {
+              AssemblyJobNumber: 'AJ003',
+              JobStatus: 'Completed',
+              PlannedQuantity: 100,
+              ActualQuantity: 50
+            }
+          ]
+        }
+      })
+      redisCacheService.set.mockResolvedValue()
+      emitUnleashedQualityAlert.mockImplementationOnce(() => {
+        throw new Error('SSE down')
+      })
+
+      const result = await unleashedERPService.syncProductionData()
+
+      expect(result.metrics.totalJobs).toBe(1)
+      expect(result.alerts).toHaveLength(1)
+      expect(redisCacheService.set).toHaveBeenCalled()
     })
 
     it('should handle API errors gracefully', async () => {
@@ -317,6 +378,30 @@ describe('UnleashedERPService', () => {
       expect(result.metrics.totalValue).toBe(250) // 5*50 + 0*30
       expect(result.alerts).toHaveLength(2)
       expect(result.alerts[0].currentStock).toBeLessThan(result.alerts[0].minLevel)
+      expect(emitUnleashedLowStockAlert).toHaveBeenCalledTimes(1)
+      expect(emitUnleashedLowStockAlert).toHaveBeenCalledWith({
+        count: 2,
+        criticalItems: 1,
+        items: expect.arrayContaining([expect.objectContaining({ productCode: 'PROD-002' })]),
+        timestamp: expect.any(String)
+      })
+    })
+
+    it('should not emit a low-stock alert when stock is healthy', async () => {
+      mockAxiosInstance.get.mockResolvedValue({
+        data: {
+          Items: [
+            { ProductCode: 'PROD-003', QtyOnHand: 50, MinStockLevel: 10, AverageLandedCost: 1 }
+          ]
+        }
+      })
+      redisCacheService.set.mockResolvedValue()
+
+      const result = await unleashedERPService.syncInventoryData()
+
+      expect(result.metrics.totalItems).toBe(1)
+      expect(result.alerts).toEqual([])
+      expect(emitUnleashedLowStockAlert).not.toHaveBeenCalled()
     })
 
     it('should handle empty inventory response', async () => {

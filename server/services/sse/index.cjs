@@ -327,6 +327,16 @@ const emitUnleashedSyncError = (payload) => {
   emitChannelEvent('dashboard', 'unleashed:sync_error', payload)
 }
 
+const emitUnleashedQualityAlert = (payload) => {
+  emitChannelEvent('manufacturing', 'unleashed:quality_alert', payload)
+  emitChannelEvent('dashboard', 'unleashed:quality_alert', payload)
+}
+
+const emitUnleashedLowStockAlert = (payload) => {
+  emitChannelEvent('inventory', 'unleashed:low_stock_alert', payload)
+  emitChannelEvent('dashboard', 'unleashed:low_stock_alert', payload)
+}
+
 const emitAdminBroadcast = (channel, event, payload, meta = {}) => {
   const target = channel === '*' ? null : channel
   const enriched = {
@@ -382,6 +392,8 @@ module.exports = {
   emitUnleashedSyncStarted,
   emitUnleashedSyncCompleted,
   emitUnleashedSyncError,
+  emitUnleashedQualityAlert,
+  emitUnleashedLowStockAlert,
   emitAdminBroadcast,
   getStatusSummary,
 }

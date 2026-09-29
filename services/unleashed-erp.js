@@ -5,7 +5,9 @@ import { logDebug, logInfo, logWarn, logError } from '../src/utils/logger';
 import {
   emitUnleashedSyncStarted,
   emitUnleashedSyncCompleted,
-  emitUnleashedSyncError
+  emitUnleashedSyncError,
+  emitUnleashedQualityAlert,
+  emitUnleashedLowStockAlert
 } from '../server/services/sse/index.cjs';
 
 
@@ -245,7 +247,7 @@ class UnleashedERPService {
 
       // Send SSE event if quality issues detected
       if (qualityAlerts.length > 0) {
-        sseService.broadcast('unleashed-quality-alert', {
+        this.emitAlert(emitUnleashedQualityAlert, {
           count: qualityAlerts.length,
           criticalIssues: qualityAlerts.filter(a => a.severity === 'High').length,
           alerts: qualityAlerts.slice(0, 3), // Top 3 critical alerts
@@ -311,7 +313,7 @@ class UnleashedERPService {
 
       // Send SSE event if low-stock items detected
       if (lowStockAlerts.length > 0) {
-        sseService.broadcast('unleashed-low-stock-alert', {
+        this.emitAlert(emitUnleashedLowStockAlert, {
           count: lowStockAlerts.length,
           criticalItems: lowStockAlerts.filter(item => item.currentStock === 0).length,
           items: lowStockAlerts.slice(0, 5), // Top 5 critical items
@@ -544,6 +546,15 @@ class UnleashedERPService {
     const activeJobs = jobs.filter(job => job.JobStatus === 'InProgress');
     // Simple calculation based on active jobs vs planned capacity
     return Math.min((activeJobs.length / 4) * 100, 100); // Assume capacity of 4 concurrent jobs
+  }
+
+  emitAlert(emit, payload) {
+    // A failed real-time notification must not discard the synced data
+    try {
+      emit(payload);
+    } catch (error) {
+      logWarn('UNLEASHED ERP: Failed to emit SSE alert:', error.message);
+    }
   }
 
   hasQualityIssues(job) {
